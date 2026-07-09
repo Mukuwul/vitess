@@ -41,6 +41,7 @@ import (
 	"vitess.io/vitess/go/vt/key"
 	"vitess.io/vitess/go/vt/srvtopo"
 	"vitess.io/vitess/go/vt/srvtopo/fakesrvtopo"
+	"vitess.io/vitess/go/vt/vterrors"
 
 	econtext "vitess.io/vitess/go/vt/vtgate/executorcontext"
 
@@ -2910,16 +2911,33 @@ func TestPrepareDoesNotStartTransaction(t *testing.T) {
 	require.False(t, session.InTransaction)
 }
 
-func TestPrepareDoesNotStartTransaction(t *testing.T) {
-	// MySQL does not start an implicit transaction for COM_STMT_PREPARE, even
-	// with autocommit disabled; the transaction starts at first execution.
+func TestPrepareUnsupportedStatements(t *testing.T) {
+	// MySQL rejects these in the prepared statement protocol with
+	// ER_UNSUPPORTED_PS (1295); vitess must not be more permissive.
 	executor, _, _, _, ctx := createExecutorEnv(t)
 
-	session := &vtgatepb.Session{TargetString: KsTestUnsharded, Autocommit: false}
+	queries := []string{
+		"begin",
+		"start transaction",
+		"use " + KsTestUnsharded,
+		"savepoint sp1",
+		"rollback to sp1",
+		"release savepoint sp1",
+		"lock tables main1 read",
+		"unlock tables",
+		"prepare p1 from 'select 1'",
+		"execute p1",
+		"deallocate prepare p1",
+	}
+	for _, sql := range queries {
+		t.Run(sql, func(t *testing.T) {
+			session := &vtgatepb.Session{TargetString: KsTestUnsharded}
 
-	_, _, err := executorPrepare(ctx, executor, session, "select id from main1 where id = ?")
-	require.NoError(t, err)
-	require.False(t, session.InTransaction)
+			_, _, err := executorPrepare(ctx, executor, session, sql)
+			require.ErrorContains(t, err, "not supported in the prepared statement protocol")
+			require.Equal(t, vterrors.UnsupportedPS, vterrors.ErrState(err))
+		})
+	}
 }
 
 func TestExecutorFlushStmt(t *testing.T) {
