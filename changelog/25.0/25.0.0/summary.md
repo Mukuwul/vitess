@@ -22,6 +22,7 @@
         - [New controls for cross-keyspace reads](#vtgate-cross-keyspace-reads)
         - [Streaming errors no longer surface as connection loss](#vtgate-streamexecute-real-errors)
         - [`ROUND()` on floating-point values rounds ties half-to-even](#vtgate-round-double-half-even)
+        - [SHA256-hashed passwords in the static gRPC auth plugin](#vtgate-grpc-static-auth-sha256)
     - **[VTTablet](#minor-changes-vttablet)**
         - [Consolidator Reject on Waiter Cap](#vttablet-consolidator-reject-on-cap)
     - **[VTTablet](#minor-changes-vttablet)**
@@ -183,6 +184,23 @@ Rounding of exact-value operands (`DECIMAL` and integer) is unchanged: those tie
 **Impact**: Queries that rely on `ROUND()` over floating-point values evaluated at VTGate may now return different results for exact-half inputs than in earlier releases. The new results match MySQL.
 
 See [#20476](https://github.com/vitessio/vitess/pull/20476) for details.
+
+#### <a id="vtgate-grpc-static-auth-sha256"/>SHA256-hashed passwords in the static gRPC auth plugin</a>
+
+The static gRPC authentication plugin (`--grpc-auth-static-password-file`) now accepts SHA256-hashed passwords in addition to plaintext ones. Each entry in the credentials file gains an optional `CachingSha2Password` field holding the hex-encoded `SHA256(SHA256(password))`, with an optional leading `*`. This is the same format the MySQL protocol's static auth server uses for its own `CachingSha2Password` field, so a single stored credential can authenticate a user on both the MySQL and gRPC endpoints, and existing `caching_sha2_password`-style hashes can be copied over verbatim.
+
+When an entry sets `CachingSha2Password`, it takes precedence over the plaintext `Password` field. A single credentials file may mix plaintext and hashed entries:
+
+```json
+[
+  {"Username": "user1", "Password": "plaintext_password"},
+  {"Username": "user2", "CachingSha2Password": "*49bbd275dd4bfb1170ced93e839a8ec1d5b86eab6acb0842502130a31702390d"}
+]
+```
+
+The hash is validated and hex-decoded once when the plugin loads. An entry whose `CachingSha2Password` is not valid hex, or does not decode to a 32-byte SHA256 digest, causes the plugin to fail to initialize. No new plugin or flag is introduced.
+
+See [#19250](https://github.com/vitessio/vitess/pull/19250) for details.
 
 ### <a id="minor-changes-vttablet"/>VTTablet</a>
 
