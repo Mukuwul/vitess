@@ -2940,6 +2940,46 @@ func TestPrepareUnsupportedStatements(t *testing.T) {
 	}
 }
 
+func TestPrepareUnsupportedStatementsLeaveSessionStateUntouched(t *testing.T) {
+	// Planning a SQL-level PREPARE or DEALLOCATE statement stores or clears
+	// the session's prepared-statement state as a side effect of plan
+	// building. When the prepared statement protocol rejects these
+	// statements, the session must remain unchanged.
+	executor, _, _, _, ctx := createExecutorEnv(t)
+
+	t.Run("prepare", func(t *testing.T) {
+		session := &vtgatepb.Session{TargetString: KsTestUnsharded}
+
+		_, _, err := executorPrepare(ctx, executor, session, "prepare p1 from 'select 1'")
+		require.ErrorContains(t, err, "not supported in the prepared statement protocol")
+		require.Empty(t, session.PrepareStatement)
+	})
+
+	t.Run("deallocate", func(t *testing.T) {
+		session := &vtgatepb.Session{TargetString: KsTestUnsharded}
+
+		_, err := executorExec(ctx, executor, session, "prepare p1 from 'select 1'", nil)
+		require.NoError(t, err)
+		require.Contains(t, session.PrepareStatement, "p1")
+
+		_, _, err = executorPrepare(ctx, executor, session, "deallocate prepare p1")
+		require.ErrorContains(t, err, "not supported in the prepared statement protocol")
+		require.Contains(t, session.PrepareStatement, "p1")
+	})
+}
+
+func TestPrepareStatementWithNestedPrepare(t *testing.T) {
+	// MySQL rejects PREPARE, EXECUTE, and DEALLOCATE inside the statement
+	// being prepared with ER_UNSUPPORTED_PS, and the failed PREPARE must not
+	// leave prepared-statement state behind in the session.
+	executor, _, _, _, ctx := createExecutorEnv(t)
+	session := &vtgatepb.Session{TargetString: KsTestUnsharded}
+
+	_, err := executorExec(ctx, executor, session, `prepare p1 from 'prepare p2 from "select 1"'`, nil)
+	require.ErrorContains(t, err, "not supported in the prepared statement protocol")
+	require.Empty(t, session.PrepareStatement)
+}
+
 func TestExecutorFlushStmt(t *testing.T) {
 	executor, _, _, _, _ := createExecutorEnv(t)
 

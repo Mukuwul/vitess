@@ -1906,7 +1906,17 @@ func (e *Executor) PlanPrepareStmt(ctx context.Context, safeSession *econtext.Sa
 	// creating this log stats to not interfere with the original log stats.
 	lStats := logstats.NewLogStats(ctx, "prepare", query, safeSession.GetSessionUUID(), nil, streamlog.GetQueryLogConfig())
 	plan, _, _, err := e.fetchOrCreatePlan(ctx, safeSession, query, nil, false, true, lStats, false)
-	return plan, err
+	if err != nil {
+		return nil, err
+	}
+	// MySQL only permits a subset of statements to be prepared; SQL-level
+	// PREPARE shares the restriction with the binary protocol, which also
+	// rules out nesting PREPARE, EXECUTE, and DEALLOCATE PREPARE inside a
+	// prepared statement.
+	if !preparableStatement(plan.QueryType) {
+		return nil, errUnsupportedPS()
+	}
+	return plan, nil
 }
 
 func (e *Executor) Close() {
